@@ -132,7 +132,7 @@ class DingTalkAdapter(BasePlatformAdapter):
         while self._running:
             try:
                 logger.debug("[%s] Starting stream client...", self.name)
-                await asyncio.to_thread(self._stream_client.start)
+                await self._stream_client.start()
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -321,19 +321,19 @@ class _IncomingHandler(ChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
         self._adapter = adapter
         self._loop = loop
 
-    def process(self, message: "ChatbotMessage"):
+    async def process(self, message: "ChatbotMessage"):
         """Called by dingtalk-stream in its thread when a message arrives.
 
-        Schedules the async handler on the main event loop.
+        Schedules the async handler on the main event loop and waits for completion.
         """
         loop = self._loop
         if loop is None or loop.is_closed():
             logger.error("[DingTalk] Event loop unavailable, cannot dispatch message")
             return dingtalk_stream.AckMessage.STATUS_OK, "OK"
 
-        future = asyncio.run_coroutine_threadsafe(self._adapter._on_message(message), loop)
         try:
-            future.result(timeout=60)
+            future = asyncio.run_coroutine_threadsafe(self._adapter._on_message(message), loop)
+            await asyncio.wrap_future(future)
         except Exception:
             logger.exception("[DingTalk] Error processing incoming message")
 
