@@ -241,6 +241,9 @@ class DingTalkAdapter(BasePlatformAdapter):
         text = getattr(message, "text", None) or ""
         if isinstance(text, dict):
             content = text.get("content", "").strip()
+        elif hasattr(text, 'content'):
+            # TextContent object - extract .content attribute
+            content = str(text.content).strip() if text.content else ""
         else:
             content = str(text).strip()
 
