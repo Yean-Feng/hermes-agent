@@ -129,18 +129,18 @@ class DingTalkAdapter(BasePlatformAdapter):
     async def _run_stream(self) -> None:
         """Run the blocking stream client with auto-reconnection."""
         backoff_idx = 0
-        while self._running:
+        while self._running and self._stream_client is not None:
             try:
                 logger.debug("[%s] Starting stream client...", self.name)
                 await self._stream_client.start()
             except asyncio.CancelledError:
                 return
             except Exception as e:
-                if not self._running:
+                if not self._running or self._stream_client is None:
                     return
                 logger.warning("[%s] Stream client error: %s", self.name, e)
 
-            if not self._running:
+            if not self._running or self._stream_client is None:
                 return
 
             delay = RECONNECT_BACKOFF[min(backoff_idx, len(RECONNECT_BACKOFF) - 1)]
@@ -153,19 +153,25 @@ class DingTalkAdapter(BasePlatformAdapter):
         self._running = False
         self._mark_disconnected()
 
+        # Cancel stream task first - the SDK's start() loop will exit on CancelledError
         if self._stream_task:
             self._stream_task.cancel()
             try:
                 await self._stream_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
             self._stream_task = None
 
+        # Clear stream client after task is cancelled
+        self._stream_client = None
+
         if self._http_client:
-            await self._http_client.aclose()
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
             self._http_client = None
 
-        self._stream_client = None
         self._session_webhooks.clear()
         self._seen_messages.clear()
         logger.info("[%s] Disconnected", self.name)
@@ -326,6 +332,14 @@ class _IncomingHandler(ChatbotHandler if DINGTALK_STREAM_AVAILABLE else object):
 
         Schedules the async handler on the main event loop and waits for completion.
         """
+        # Convert CallbackMessage to ChatbotMessage if needed
+        if isinstance(message, dingtalk_stream.frames.CallbackMessage):
+            data = getattr(message, 'data', None) or {}
+            if isinstance(data, dict):
+                message = dingtalk_stream.ChatbotMessage.from_dict(data)
+
+        logger.info("[DingTalk] process() called - msg_id: %s, conversation_id: %s, type: %s",
+                    getattr(message, 'message_id', None), getattr(message, 'conversation_id', None), type(message).__name__)
         loop = self._loop
         if loop is None or loop.is_closed():
             logger.error("[DingTalk] Event loop unavailable, cannot dispatch message")
